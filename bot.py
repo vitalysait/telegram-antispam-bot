@@ -1,36 +1,26 @@
+import os
 import logging
 import re
 import json
-import os
 import time
 from collections import defaultdict
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler, CallbackQueryHandler
 
 # ============================================
-# ТВОИ ДАННЫЕ
+# ЗАГРУЗКА ПЕРЕМЕННЫХ ИЗ .env ФАЙЛА
 # ============================================
-import logging
-import re
-import json
-import os
-import time
-from collections import defaultdict
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler, CallbackQueryHandler
-from dotenv import load_dotenv  # Эту строку ДОБАВИТЬ
-
-# Загружаем переменные из .env файла
 load_dotenv()
 
-# ============================================
-# ТВОИ ДАННЫЕ (теперь из файла .env)
-# ============================================
 TOKEN = os.getenv('BOT_TOKEN')
 MY_ID = int(os.getenv('ADMIN_ID', '0'))
 
 if not TOKEN:
     raise ValueError("❌ ОШИБКА: Токен не найден! Создай файл .env с BOT_TOKEN=...")
+
+if MY_ID == 0:
+    raise ValueError("❌ ОШИБКА: ADMIN_ID не найден! Создай файл .env с ADMIN_ID=...")
 
 # ============================================
 # НАСТРОЙКИ ФИЛЬТРОВ (ПО УМОЛЧАНИЮ)
@@ -49,6 +39,9 @@ DEFAULT_SETTINGS = {
 
 SETTINGS_FILE = 'bot_settings.json'
 sticker_tracker = defaultdict(list)
+
+# Хранилище для тех, кто добавил бота (chat_id: user_id)
+chat_creators = {}
 
 # ============================================
 # СПИСОК МАТОВ
@@ -150,46 +143,6 @@ def check_sticker_flood(user_id, chat_id, limit=5, time_window=60):
     return len(sticker_tracker[key]) > limit
 
 # ============================================
-# НОВАЯ КОМАНДА ДЛЯ УДАЛЕНИЯ ЧАТА
-# ============================================
-async def delchat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает список чатов для удаления"""
-    user = update.effective_user
-    
-    # Проверяем, что команду использует админ
-    if user.id != MY_ID:
-        await update.message.reply_text("❌ Эта команда только для админа!")
-        return
-    
-    if not chat_settings:
-        await update.message.reply_text("📭 Нет сохраненных чатов.")
-        return
-    
-    text = "🗑 *Выбери чат для удаления:*\n\n"
-    keyboard = []
-    
-    i = 1
-    for chat_id_str in list(chat_settings.keys()):
-        try:
-            chat = await context.bot.get_chat(int(chat_id_str))
-            chat_name = chat.title or "Личный чат"
-            text += f"{i}. {chat_name}\n"
-            keyboard.append([InlineKeyboardButton(f"❌ {chat_name}", callback_data=f"delchat_{chat_id_str}")])
-        except:
-            # Если чат недоступен, показываем просто ID
-            text += f"{i}. ID: {chat_id_str} (недоступен)\n"
-            keyboard.append([InlineKeyboardButton(f"❌ ID: {chat_id_str[:10]}...", callback_data=f"delchat_{chat_id_str}")])
-        i += 1
-    
-    keyboard.append([InlineKeyboardButton("🔙 ОТМЕНА", callback_data="delchat_cancel")])
-    
-    await update.message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
-# ============================================
 # КОМАНДЫ
 # ============================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,7 +180,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"2️⃣ Сделай его администратором\n"
         f"3️⃣ Настрой фильтры через /settings\n\n"
         f"*👑 АДМИНЫ:*\n"
-        f"Админы группы могут писать всё\n\n"
+        f"Админы группы могут писать всё\n"
+        f"*👤 КТО ДОБАВИЛ БОТА:*\n"
+        f"Тот, кто добавил бота в чат, тоже не проверяется\n\n"
         f"*🗑️ УДАЛЕНИЕ ЧАТОВ:*\n"
         f"Используй /delchat чтобы удалить чат из настроек"
     )
@@ -240,7 +195,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for chat_id_str, settings in chat_settings.items():
         try:
             chat = await context.bot.get_chat(int(chat_id_str))
-            text += f"*Чат:* {chat.title}\n"
+            creator_info = ""
+            if chat_id_str in chat_creators:
+                creator_info = f" (добавил: ID {chat_creators[chat_id_str]})"
+            text += f"*Чат:* {chat.title}{creator_info}\n"
             text += f"• 🔗 Ссылки: {'✅' if settings.get('filter_links', True) else '❌'}\n"
             text += f"• 🔞 18+ стикеры: {'✅' if settings.get('filter_stickers', True) else '❌'}\n"
             text += f"• 🔠 Капс: {'✅' if settings.get('filter_caps', True) else '❌'} ({settings.get('caps_limit', 50)}%)\n"
@@ -270,6 +228,41 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     await update.message.reply_text("⚙️ *НАСТРОЙКИ*\n\nВыбери чат:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def delchat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список чатов для удаления"""
+    user = update.effective_user
+    
+    if user.id != MY_ID:
+        await update.message.reply_text("❌ Эта команда только для админа!")
+        return
+    
+    if not chat_settings:
+        await update.message.reply_text("📭 Нет сохраненных чатов.")
+        return
+    
+    text = "🗑 *Выбери чат для удаления:*\n\n"
+    keyboard = []
+    
+    i = 1
+    for chat_id_str in list(chat_settings.keys()):
+        try:
+            chat = await context.bot.get_chat(int(chat_id_str))
+            chat_name = chat.title or "Личный чат"
+            text += f"{i}. {chat_name}\n"
+            keyboard.append([InlineKeyboardButton(f"❌ {chat_name}", callback_data=f"delchat_{chat_id_str}")])
+        except:
+            text += f"{i}. ID: {chat_id_str} (недоступен)\n"
+            keyboard.append([InlineKeyboardButton(f"❌ ID: {chat_id_str[:10]}...", callback_data=f"delchat_{chat_id_str}")])
+        i += 1
+    
+    keyboard.append([InlineKeyboardButton("🔙 ОТМЕНА", callback_data="delchat_cancel")])
+    
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
 
 async def show_chat_settings(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: str):
     query = update.callback_query
@@ -402,9 +395,19 @@ async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = message.from_user
     chat = message.chat
     
-    if user.is_bot or user.id == MY_ID:
+    if user.is_bot:
         return
     
+    # Пропускаем админа
+    if user.id == MY_ID:
+        return
+    
+    # Пропускаем того, кто добавил бота в этот чат
+    if str(chat.id) in chat_creators and chat_creators[str(chat.id)] == user.id:
+        print(f"👤 Пропущен создатель чата {chat.id}")
+        return
+    
+    # Пропускаем админов чата
     try:
         chat_member = await context.bot.get_chat_member(chat.id, user.id)
         if chat_member.status in ['administrator', 'creator']:
@@ -462,24 +465,46 @@ async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
 # ============================================
-# НОВЫЙ ЧАТ
+# НОВЫЙ ЧАТ - ЗАПОМИНАЕМ, КТО ДОБАВИЛ
 # ============================================
 async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.new_chat_members:
         return
     
+    # Проверяем, добавили ли бота
+    bot_added = False
+    adder_id = None
+    
     for member in message.new_chat_members:
         if member.id == context.bot.id:
-            chat_id = str(message.chat.id)
-            if chat_id not in chat_settings:
-                chat_settings[chat_id] = DEFAULT_SETTINGS.copy()
-                save_settings(chat_settings)
-            
-            try:
-                await context.bot.send_message(MY_ID, f"✅ Бот добавлен в чат: {message.chat.title}")
-            except:
-                pass
+            bot_added = True
+            adder_id = message.from_user.id
+            break
+    
+    if bot_added and adder_id:
+        chat_id = str(message.chat.id)
+        
+        # Запоминаем, кто добавил бота
+        chat_creators[chat_id] = adder_id
+        print(f"👤 Бота добавил пользователь {adder_id} в чат {message.chat.title}")
+        
+        # Создаем настройки для нового чата
+        if chat_id not in chat_settings:
+            chat_settings[chat_id] = DEFAULT_SETTINGS.copy()
+            save_settings(chat_settings)
+        
+        # Уведомляем админа
+        try:
+            adder_info = f" (добавил ID: {adder_id})"
+            await context.bot.send_message(
+                MY_ID,
+                f"✅ Бот добавлен в чат: {message.chat.title}{adder_info}\n"
+                f"ID: {chat_id}\n\n"
+                f"Этот пользователь теперь не проверяется!"
+            )
+        except:
+            pass
 
 # ============================================
 # ЗАПУСК
@@ -490,12 +515,9 @@ def main():
     print("║  ANTISPAM БОТ ЗАПУЩЕН   ║")
     print("╚══════════════════════════╝")
     print("=" * 60)
-    print(f"📌 Токен: {TOKEN[:15]}...")
+    print(f"📌 Токен загружен из .env")
     print(f"📌 Твой ID: {MY_ID}")
     print(f"📌 Чатов в настройках: {len(chat_settings)}")
-    print("=" * 60)
-    print("📋 Новые команды:")
-    print("   /delchat - удалить чат из настроек")
     print("=" * 60)
     print("✅ Бот работает! Нажми Ctrl+C для остановки")
     print("=" * 60)
@@ -506,7 +528,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("delchat", delchat_command))  # Новая команда
+    app.add_handler(CommandHandler("delchat", delchat_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, check_group))
     app.add_handler(MessageHandler(filters.Sticker.ALL, check_group))
