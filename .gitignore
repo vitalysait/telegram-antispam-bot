@@ -1,0 +1,19 @@
+# Секретные данные
+.env
+*.env
+bot_settings.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+ENV/
+.venv
+*.log
+
+# Редакторы кода
+.vscode/
+.idea/
+*.swp
