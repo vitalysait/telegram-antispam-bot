@@ -4,7 +4,6 @@ import json
 import time
 import re
 from collections import defaultdict
-from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler, CallbackQueryHandler
@@ -243,6 +242,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"• 🤬 Маты: {'✅' if settings.get('filter_swear', True) else '❌'}\n\n"
             found_chats = True
         except Exception as e:
+            # Если чат недоступен, показываем сохраненные данные
             chat_title = settings.get('chat_title', 'Неизвестный чат')
             text += f"*📌 {chat_title} (недоступен)*\n"
             text += f"🆔 ID: `{chat_id_str}`\n"
@@ -271,6 +271,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_title = chat.title or "Личный чат"
                 keyboard.append([InlineKeyboardButton(f"👑 {chat_title}", callback_data=f"admin_{chat_id_str}")])
             except:
+                # Если чат недоступен, используем сохраненное название
                 chat_title = settings.get('chat_title', 'Неизвестный чат')
                 keyboard.append([InlineKeyboardButton(f"👑 {chat_title}", callback_data=f"admin_{chat_id_str}")])
     
@@ -292,6 +293,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_title = chat.title or "Личный чат"
             keyboard.append([InlineKeyboardButton(f"⚙️ {chat_title}", callback_data=f"chat_{chat_id_str}")])
         except:
+            # Если чат недоступен, используем сохраненное название
             chat_title = settings.get('chat_title', 'Неизвестный чат')
             keyboard.append([InlineKeyboardButton(f"⚙️ {chat_title}", callback_data=f"chat_{chat_id_str}")])
     
@@ -439,6 +441,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_settings(chat_settings)
             await query.edit_message_text(f"✅ Админ {admin_id} удален!")
             time.sleep(1)
+            # Возвращаемся к списку админов
             new_query = update
             new_query.callback_query.data = f"admin_{chat_id}"
             await button_handler(new_query, context)
@@ -506,6 +509,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         save_settings(chat_settings)
         
+        # Обновляем отображение
         new_query = update
         new_query.callback_query.data = f"chat_{chat_id}"
         await button_handler(new_query, context)
@@ -627,20 +631,25 @@ async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.is_bot:
         return
     
+    # Обновляем информацию о чате
     settings = get_chat_settings(chat.id)
     settings['chat_title'] = chat.title or "Личный чат"
     settings['last_seen'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     save_settings(chat_settings)
     
+    # Пропускаем главного админа
     if user.id == MY_ID:
         return
     
+    # Пропускаем создателя чата
     if settings.get('chat_creator') == user.id:
         return
     
+    # Пропускаем дополнительных админов
     if user.id in settings.get('custom_admins', []):
         return
     
+    # Пропускаем админов чата
     try:
         chat_member = await context.bot.get_chat_member(chat.id, user.id)
         if chat_member.status in ['administrator', 'creator']:
@@ -648,6 +657,7 @@ async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
     
+    # Проверка стикеров
     if message.sticker:
         if settings.get('filter_sticker_flood', True):
             if check_sticker_flood(user.id, chat.id, settings.get('sticker_flood_limit', 5)):
@@ -660,6 +670,7 @@ async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(f"@{user.username} ❗ *18+ СТИКЕРЫ ЗАПРЕЩЕНЫ*", parse_mode="Markdown")
             return
     
+    # Проверка текста
     if message.text:
         if settings.get('filter_links', True) and is_tg_link(message.text):
             await message.delete()
@@ -676,6 +687,7 @@ async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(f"@{user.username} ❗ *НЕ КРИЧИ!*", parse_mode="Markdown")
             return
     
+    # Проверка подписей
     if message.caption:
         if settings.get('filter_links', True) and is_tg_link(message.caption):
             await message.delete()
