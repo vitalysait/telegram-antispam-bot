@@ -3,6 +3,8 @@ import logging
 import json
 import time
 import re
+import threading
+from flask import Flask
 from collections import defaultdict
 from datetime import datetime
 from dotenv import load_dotenv
@@ -27,6 +29,30 @@ try:
     MY_ID = int(MY_ID)
 except:
     raise ValueError("❌ ОШИБКА: ADMIN_ID должен быть числом!")
+
+# ============================================
+# ЗАСТАВЛЯЕМ RENDER ЗАТКНУТЬСЯ
+# ============================================
+import threading
+from flask import Flask
+
+# Создаём простой веб-сервер
+web_app = Flask(__name__)
+
+@web_app.route('/')
+@web_app.route('/health')
+@web_app.route('/healthz')
+def health_check():
+    return "Bot is alive!", 200
+
+def run_web_server():
+    """Запускаем сервер на порту, который требует Render"""
+    port = int(os.environ.get('PORT', 10000))
+    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# Запускаем сервер в отдельном потоке
+threading.Thread(target=run_web_server, daemon=True).start()
+print("✅ Веб-сервер для Render запущен на порту", os.environ.get('PORT', 10000))
 
 # ============================================
 # НАСТРОЙКИ ФИЛЬТРОВ (ПО УМОЛЧАНИЮ)
@@ -786,7 +812,7 @@ async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
 # ============================================
-# ЗАПУСК
+# ЗАПУСК (ОСНОВНАЯ ФУНКЦИЯ)
 # ============================================
 def main():
     print("=" * 60)
@@ -848,3 +874,27 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # ============================================
+# ЗАСТАВЛЯЕМ RENDER ЗАТКНУТЬСЯ
+# ============================================
+import os
+import threading
+from flask import Flask
+
+# Создаём простой веб-сервер
+web_app = Flask(__name__)
+
+@web_app.route('/')
+@web_app.route('/health')
+@web_app.route('/healthz')
+def health_check():
+    return "Bot is alive!", 200
+
+def run_web_server():
+    """Запускаем сервер на порту, который требует Render"""
+    port = int(os.environ.get('PORT', 10000))
+    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+# Запускаем сервер в отдельном потоке
+threading.Thread(target=run_web_server, daemon=True).start()
+print("✅ Веб-сервер для Render запущен на порту", os.environ.get('PORT', 10000))
