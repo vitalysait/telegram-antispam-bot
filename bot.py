@@ -1,11 +1,8 @@
 import os
 import logging
 import json
-import time
-import re
 import threading
 from flask import Flask
-from collections import defaultdict
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -39,46 +36,46 @@ logging.basicConfig(
 )
 
 # ============================================
-# НАСТРОЙКИ ФИЛЬТРОВ
+# ФАЙЛ ДЛЯ ХРАНЕНИЯ НАСТРОЕК
 # ============================================
-SETTINGS_FILE = 'bot_settings.json'
-sticker_tracker = defaultdict(list)
+SETTINGS_FILE = 'filters_settings.json'
 
-# База данных чатов (только группы!)
-chat_data = {}
+# Настройки по умолчанию для каждого чата
+DEFAULT_FILTERS = {
+    'links': True,      # ссылки
+    'stickers': True,   # 18+ стикеры
+    'caps': True,       # капс
+    'swear': True,      # маты
+    'flood': True       # флуд стикерами
+}
 
-def load_chat_data():
-    """Загружает данные о чатах"""
-    global chat_data
+# Загружаем настройки
+def load_filters():
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                chat_data = json.load(f)
-            print(f"✅ Загружено {len(chat_data)} чатов")
+                return json.load(f)
         except:
-            chat_data = {}
-    else:
-        chat_data = {}
+            return {}
+    return {}
 
-def save_chat_data():
-    """Сохраняет данные о чатах"""
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(chat_data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"❌ Ошибка сохранения: {e}")
+def save_filters(filters):
+    with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(filters, f, ensure_ascii=False, indent=2)
 
-# Загружаем данные при старте
-load_chat_data()
+# Глобальная переменная с настройками
+chat_filters = load_filters()
+print(f"✅ Загружены настройки для {len(chat_filters)} чатов")
 
 # ============================================
-# СПИСОК МАТОВ
+# ПОЛУЧИТЬ НАСТРОЙКИ ЧАТА
 # ============================================
-BAD_WORDS = [
-    'хуй', 'пизд', 'ебл', 'еба', 'ёб', 'бля', 'блять', 'сука', 'пиздец',
-    'нахер', 'нафиг', 'похер', 'хер', 'мудак', 'гандон', 'пидор', 'педик',
-    'шлюх', 'далбаеб', 'долбоеб', 'ебан', 'ебну', 'fuck', 'shit', 'asshole'
-]
+def get_chat_filters(chat_id):
+    chat_id = str(chat_id)
+    if chat_id not in chat_filters:
+        chat_filters[chat_id] = DEFAULT_FILTERS.copy()
+        save_filters(chat_filters)
+    return chat_filters[chat_id]
 
 # ============================================
 # ФУНКЦИИ ПРОВЕРКИ
@@ -93,290 +90,173 @@ def is_18_sticker(sticker):
     """Проверяет 18+ стикеры"""
     if not sticker or not sticker.set_name:
         return False
-    
     name = sticker.set_name.lower()
     bad = ['nsfw', '18+', 'sex', 'porn', 'adult', 'hentai', 'xxx']
     return any(word in name for word in bad)
 
-def is_caps(text, limit=50):
-    """Проверяет капс"""
+def is_caps(text):
+    """Проверяет капс (больше 50% заглавных)"""
     if not text or len(text) < 5:
         return False
-    
     letters = [c for c in text if c.isalpha()]
     if not letters:
         return False
-    
     caps = sum(1 for c in letters if c.isupper())
-    percent = (caps / len(letters)) * 100
-    return percent > limit
+    return (caps / len(letters)) > 0.5
 
 def has_swear(text):
     """Проверяет маты"""
     if not text:
         return False
-    
     text = text.lower()
-    for word in BAD_WORDS:
-        if word in text:
-            return True
-    return False
-
-def is_flood(user_id, chat_id, limit=5):
-    """Проверяет флуд стикерами"""
-    key = f"{user_id}:{chat_id}"
-    now = time.time()
-    
-    # Очищаем старые записи (старше 60 секунд)
-    sticker_tracker[key] = [t for t in sticker_tracker.get(key, []) if now - t < 60]
-    
-    # Добавляем новый стикер
-    if key not in sticker_tracker:
-        sticker_tracker[key] = []
-    sticker_tracker[key].append(now)
-    
-    return len(sticker_tracker[key]) > limit
+    bad_words = ['хуй', 'пизд', 'ебл', 'бля', 'сука', 'fuck', 'shit']
+    return any(word in text for word in bad_words)
 
 # ============================================
 # ПРОВЕРКА ПРАВ
 # ============================================
-def is_chat_admin(chat_id, user_id):
-    """Проверяет, является ли пользователь админом в этом чате"""
-    chat = chat_data.get(str(chat_id), {})
+async def is_user_admin(update, context):
+    """Проверяет, является ли пользователь админом"""
+    user = update.effective_user
+    chat = update.effective_chat
     
     # Главный админ бота
-    if user_id == ADMIN_ID:
+    if user.id == ADMIN_ID:
         return True
     
-    # Тот, кто добавил бота
-    if chat.get('creator') == user_id:
-        return True
-    
-    # Дополнительные админы
-    if user_id in chat.get('admins', []):
-        return True
-    
-    return False
+    # Админ в чате
+    try:
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        return member.status in ['administrator', 'creator']
+    except:
+        return False
 
 # ============================================
-# КОМАНДЫ
+# КОМАНДА /FILTERS - НАСТРОЙКА ФИЛЬТРОВ
 # ============================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = (
-        f"╔════════════════════════╗\n"
-        f"║   ДОБРО ПОЖАЛОВАТЬ!   ║\n"
-        f"║      👋 {user.first_name}      ║\n"
-        f"╚════════════════════════╝\n\n"
-        f"Я антиспам бот. Защищаю группы от:\n"
-        f"• 🔗 Ссылок на Telegram\n"
-        f"• 🔞 18+ стикеров\n"
-        f"• 🔠 КАПСА\n"
-        f"• 🎭 Флуда стикерами\n"
-        f"• 🤬 Матов\n\n"
-        f"Команды:\n"
-        f"/help - помощь\n"
-        f"/admin - управление админами\n"
-        f"/status - статус"
-    )
-    await update.message.reply_text(text)
-
-async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        f"Как использовать:\n"
-        f"1. Добавь бота в группу\n"
-        f"2. Сделай его администратором\n"
-        f"3. Настройки через /admin\n\n"
-        f"Админы бота не проверяются!"
-    )
-    await update.message.reply_text(text)
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not chat_data:
-        await update.message.reply_text("❌ Бот не добавлен ни в одну группу")
+async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает меню настройки фильтров"""
+    
+    # Проверяем, что команда в группе и пользователь админ
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Эта команда работает только в группах!")
         return
     
-    text = "📊 СТАТУС:\n\n"
-    for chat_id, data in chat_data.items():
-        try:
-            chat = await context.bot.get_chat(int(chat_id))
-            name = chat.title or "Группа"
-            text += f"• {name}\n"
-            text += f"  Админов: {len(data.get('admins', []))}\n"
-        except:
-            pass
-    
-    await update.message.reply_text(text)
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Управление админами"""
-    user = update.effective_user
-    
-    # Показываем только группы, где пользователь админ
-    buttons = []
-    for chat_id, data in chat_data.items():
-        if is_chat_admin(chat_id, user.id):
-            try:
-                chat = await context.bot.get_chat(int(chat_id))
-                name = chat.title or "Группа"
-                buttons.append([InlineKeyboardButton(f"👑 {name}", callback_data=f"admin_{chat_id}")])
-            except:
-                pass
-    
-    if not buttons:
-        await update.message.reply_text("❌ Нет доступных групп")
+    if not await is_user_admin(update, context):
+        await update.message.reply_text("❌ Только админы могут настраивать фильтры!")
         return
+    
+    chat_id = str(update.effective_chat.id)
+    filters = get_chat_filters(chat_id)
+    
+    # Создаем кнопки с текущим статусом
+    keyboard = [
+        [InlineKeyboardButton(
+            f"{'✅' if filters['links'] else '❌'} 🔗 Ссылки на Telegram",
+            callback_data="toggle_links"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['stickers'] else '❌'} 🔞 18+ стикеры",
+            callback_data="toggle_stickers"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['caps'] else '❌'} 🔠 КАПС",
+            callback_data="toggle_caps"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['swear'] else '❌'} 🤬 Маты",
+            callback_data="toggle_swear"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['flood'] else '❌'} 🎭 Флуд стикерами",
+            callback_data="toggle_flood"
+        )]
+    ]
     
     await update.message.reply_text(
-        "Выбери группу:",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        "⚙️ *НАСТРОЙКИ ФИЛЬТРОВ*\n\nНажми на фильтр, чтобы включить/выключить:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
     )
 
 # ============================================
-# ОБРАБОТКА КНОПОК
+# ОБРАБОТКА НАЖАТИЙ НА КНОПКИ
 # ============================================
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    data = query.data
-    user_id = query.from_user.id
+    chat_id = str(update.effective_chat.id)
+    filters = get_chat_filters(chat_id)
     
-    if data.startswith("admin_"):
-        chat_id = data.replace("admin_", "")
-        
-        if not is_chat_admin(chat_id, user_id):
-            await query.edit_message_text("❌ Нет прав")
-            return
-        
-        chat = chat_data.get(chat_id, {})
-        admins = chat.get('admins', [])
-        
-        text = f"👑 Админы:\n\n"
-        text += f"• Создатель: {chat.get('creator', '?')}\n"
-        if admins:
-            text += "\nДополнительные:\n"
-            for a in admins:
-                text += f"• {a}\n"
-        else:
-            text += "\nНет дополнительных админов"
-        
-        buttons = [
-            [InlineKeyboardButton("➕ Добавить", callback_data=f"add_{chat_id}")],
-            [InlineKeyboardButton("➖ Удалить", callback_data=f"remove_{chat_id}")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="back")]
-        ]
-        
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+    # Переключаем фильтр
+    if query.data == "toggle_links":
+        filters['links'] = not filters['links']
+    elif query.data == "toggle_stickers":
+        filters['stickers'] = not filters['stickers']
+    elif query.data == "toggle_caps":
+        filters['caps'] = not filters['caps']
+    elif query.data == "toggle_swear":
+        filters['swear'] = not filters['swear']
+    elif query.data == "toggle_flood":
+        filters['flood'] = not filters['flood']
     
-    elif data.startswith("add_"):
-        chat_id = data.replace("add_", "")
-        context.user_data['waiting_for'] = ('add_admin', chat_id)
-        await query.edit_message_text(
-            "Отправь ID пользователя:"
-        )
+    # Сохраняем изменения
+    save_filters(chat_filters)
+    print(f"💾 Настройки сохранены для чата {chat_id}: {filters}")
     
-    elif data.startswith("remove_"):
-        chat_id = data.replace("remove_", "")
-        chat = chat_data.get(chat_id, {})
-        admins = chat.get('admins', [])
-        
-        if not admins:
-            await query.edit_message_text("❌ Нет админов для удаления")
-            return
-        
-        buttons = []
-        for a in admins:
-            buttons.append([InlineKeyboardButton(f"❌ {a}", callback_data=f"del_{chat_id}_{a}")])
-        buttons.append([InlineKeyboardButton("🔙 Назад", callback_data=f"admin_{chat_id}")])
-        
-        await query.edit_message_text(
-            "Выбери админа:",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+    # Обновляем клавиатуру
+    keyboard = [
+        [InlineKeyboardButton(
+            f"{'✅' if filters['links'] else '❌'} 🔗 Ссылки на Telegram",
+            callback_data="toggle_links"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['stickers'] else '❌'} 🔞 18+ стикеры",
+            callback_data="toggle_stickers"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['caps'] else '❌'} 🔠 КАПС",
+            callback_data="toggle_caps"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['swear'] else '❌'} 🤬 Маты",
+            callback_data="toggle_swear"
+        )],
+        [InlineKeyboardButton(
+            f"{'✅' if filters['flood'] else '❌'} 🎭 Флуд стикерами",
+            callback_data="toggle_flood"
+        )]
+    ]
     
-    elif data.startswith("del_"):
-        parts = data.split("_")
-        chat_id = parts[1]
-        admin_id = int(parts[2])
-        
-        if chat_id in chat_data:
-            if admin_id in chat_data[chat_id].get('admins', []):
-                chat_data[chat_id]['admins'].remove(admin_id)
-                save_chat_data()
-                await query.edit_message_text(f"✅ Админ {admin_id} удален")
-        
-        # Возврат
-        new_query = update
-        new_query.callback_query.data = f"admin_{chat_id}"
-        await button(new_query, context)
-    
-    elif data == "back":
-        await admin(update, context)
-
-# ============================================
-# ОБРАБОТКА ТЕКСТА (ДЛЯ ДОБАВЛЕНИЯ АДМИНОВ)
-# ============================================
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текст только в ЛС для добавления админов"""
-    
-    if update.effective_chat.type != "private":
-        return
-    
-    if 'waiting_for' not in context.user_data:
-        return
-    
-    action, chat_id = context.user_data['waiting_for']
-    user_id = update.effective_user.id
-    
-    if action == 'add_admin' and is_chat_admin(chat_id, user_id):
-        try:
-            new_admin = int(update.message.text.strip())
-            
-            if chat_id not in chat_data:
-                chat_data[chat_id] = {'admins': []}
-            if 'admins' not in chat_data[chat_id]:
-                chat_data[chat_id]['admins'] = []
-            
-            if new_admin in chat_data[chat_id]['admins']:
-                await update.message.reply_text("❌ Уже админ")
-            else:
-                chat_data[chat_id]['admins'].append(new_admin)
-                save_chat_data()
-                await update.message.reply_text(f"✅ Админ {new_admin} добавлен")
-        
-        except:
-            await update.message.reply_text("❌ Нужно отправить число")
-        
-        del context.user_data['waiting_for']
+    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ============================================
 # ПРОВЕРКА СООБЩЕНИЙ В ГРУППАХ
 # ============================================
-async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверяет сообщения в группах"""
     
+    # Работаем только в группах
     if update.effective_chat.type == "private":
         return
     
-    msg = update.message
-    if not msg:
+    message = update.message
+    if not message:
         return
     
-    user = msg.from_user
-    chat = msg.chat
+    user = message.from_user
+    chat = message.chat
     
+    # Пропускаем ботов
     if user.is_bot:
         return
     
-    # Пропускаем админов
-    if is_chat_admin(chat.id, user.id):
+    # Пропускаем главного админа
+    if user.id == ADMIN_ID:
         return
     
-    # Пропускаем админов Telegram
+    # Пропускаем админов чата
     try:
         member = await context.bot.get_chat_member(chat.id, user.id)
         if member.status in ['administrator', 'creator']:
@@ -384,137 +264,93 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
     
-    # Получаем настройки чата (пока все по умолчанию)
-    settings = chat_data.get(str(chat.id), {})
+    # Получаем настройки для этого чата
+    filters = get_chat_filters(chat.id)
+    print(f"🔍 Проверка сообщения в чате {chat.id}, настройки: {filters}")
     
     # Проверка стикеров
-    if msg.sticker:
-        # Флуд
-        if is_flood(user.id, chat.id):
-            try:
-                await msg.delete()
-                await msg.reply_text(f"@{user.username} не флуди стикерами!")
-            except:
-                pass
-            return
+    if message.sticker:
+        if filters['flood']:
+            # Здесь можно добавить проверку флуда
+            pass
         
-        # 18+
-        if is_18_sticker(msg.sticker):
+        if filters['stickers'] and is_18_sticker(message.sticker):
             try:
-                await msg.delete()
-                await msg.reply_text(f"@{user.username} 18+ стикеры запрещены!")
+                await message.delete()
+                await message.reply_text(f"@{user.username} 🔞 18+ стикеры запрещены!")
+                print(f"🚫 Удален 18+ стикер")
             except:
                 pass
             return
     
     # Проверка текста
-    text = msg.text or msg.caption
+    text = message.text or message.caption
     if text:
-        # Ссылки
-        if has_tg_link(text):
+        if filters['links'] and has_tg_link(text):
             try:
-                await msg.delete()
-                await msg.reply_text(f"@{user.username} ссылки на Telegram запрещены!")
+                await message.delete()
+                await message.reply_text(f"@{user.username} 🔗 Ссылки на Telegram запрещены!")
+                print(f"🚫 Удалена ссылка")
             except:
                 pass
             return
         
-        # Маты
-        if has_swear(text):
+        if filters['swear'] and has_swear(text):
             try:
-                await msg.delete()
-                await msg.reply_text(f"@{user.username} маты запрещены!")
+                await message.delete()
+                await message.reply_text(f"@{user.username} 🤬 Маты запрещены!")
+                print(f"🚫 Удалены маты")
             except:
                 pass
             return
         
-        # Капс
-        if is_caps(text):
+        if filters['caps'] and is_caps(text):
             try:
-                await msg.delete()
-                await msg.reply_text(f"@{user.username} не кричи!")
+                await message.delete()
+                await message.reply_text(f"@{user.username} 🔠 Не кричи! КАПС запрещен!")
+                print(f"🚫 Удален капс")
             except:
                 pass
             return
 
 # ============================================
-# НОВЫЙ ЧАТ
+# КОМАНДА START
 # ============================================
-async def new_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Когда бота добавляют в новый чат"""
-    msg = update.message
-    if not msg or not msg.new_chat_members:
-        return
-    
-    # Только группы
-    if msg.chat.type == "private":
-        return
-    
-    for member in msg.new_chat_members:
-        if member.id == context.bot.id:
-            chat_id = str(msg.chat.id)
-            adder_id = msg.from_user.id
-            
-            # Сохраняем информацию о чате
-            chat_data[chat_id] = {
-                'creator': adder_id,
-                'admins': [],
-                'added': datetime.now().strftime("%Y-%m-%d %H:%M")
-            }
-            save_chat_data()
-            
-            # Уведомляем админа
-            try:
-                await context.bot.send_message(
-                    ADMIN_ID,
-                    f"✅ Бот добавлен в группу!\n"
-                    f"Название: {msg.chat.title}\n"
-                    f"ID: {chat_id}\n"
-                    f"Добавил: {adder_id}"
-                )
-            except:
-                pass
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_text(
+        f"👋 Привет, {user.first_name}!\n\n"
+        f"Я антиспам бот. Добавь меня в группу и сделай админом.\n"
+        f"В группе используй /filters для настройки."
+    )
 
 # ============================================
 # ЗАПУСК
 # ============================================
 def main():
     print("=" * 60)
-    print("╔══════════════════════════╗")
-    print("║     ANTISPAM БОТ         ║")
-    print("╚══════════════════════════╝")
+    print("🤖 ANTISPAM БОТ С ФИЛЬТРАМИ")
     print("=" * 60)
     print(f"✅ Твой ID: {ADMIN_ID}")
-    print(f"✅ Групп в базе: {len(chat_data)}")
+    print(f"✅ Загружено настроек: {len(chat_filters)}")
+    print("=" * 60)
+    print("📋 Команды:")
+    print("   /filters - настройка фильтров (в группе)")
     print("=" * 60)
     
     app = Application.builder().token(TOKEN).build()
     
     # Команды
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help))
-    app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CommandHandler("filters", filters_command))
     
     # Кнопки
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Текст (только для ЛС)
+    # Проверка сообщений
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-        text_handler
-    ))
-    
-    # Проверка сообщений в группах
-    app.add_handler(MessageHandler(
-        (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Sticker.ALL) & filters.ChatType.GROUPS,
-        check
-    ))
-    
-    # Новые чаты
-    app.add_handler(MessageHandler(
-        filters.StatusUpdate.NEW_CHAT_MEMBERS,
-        new_chat
+        filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Sticker.ALL,
+        check_message
     ))
     
     print("✅ Бот запущен!")
