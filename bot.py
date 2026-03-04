@@ -17,100 +17,18 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes, Com
 load_dotenv()
 
 TOKEN = os.getenv('BOT_TOKEN')
-MY_ID = os.getenv('ADMIN_ID')
+ADMIN_ID = os.getenv('ADMIN_ID')
 
 if not TOKEN:
     raise ValueError("❌ ОШИБКА: Токен не найден! Создай файл .env с BOT_TOKEN=...")
 
-if not MY_ID:
+if not ADMIN_ID:
     raise ValueError("❌ ОШИБКА: ADMIN_ID не найден! Создай файл .env с ADMIN_ID=...")
 
 try:
-    MY_ID = int(MY_ID)
+    ADMIN_ID = int(ADMIN_ID)
 except:
     raise ValueError("❌ ОШИБКА: ADMIN_ID должен быть числом!")
-
-# ============================================
-# ЗАСТАВЛЯЕМ RENDER ЗАТКНУТЬСЯ
-# ============================================
-import threading
-from flask import Flask
-
-# Создаём простой веб-сервер
-web_app = Flask(__name__)
-
-@web_app.route('/')
-@web_app.route('/health')
-@web_app.route('/healthz')
-def health_check():
-    return "Bot is alive!", 200
-
-def run_web_server():
-    """Запускаем сервер на порту, который требует Render"""
-    port = int(os.environ.get('PORT', 10000))
-    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
-
-# Запускаем сервер в отдельном потоке
-threading.Thread(target=run_web_server, daemon=True).start()
-print("✅ Веб-сервер для Render запущен на порту", os.environ.get('PORT', 10000))
-
-# ============================================
-# НАСТРОЙКИ ФИЛЬТРОВ (ПО УМОЛЧАНИЮ)
-# ============================================
-DEFAULT_SETTINGS = {
-    'filter_links': True,
-    'filter_stickers': True,
-    'filter_caps': True,
-    'filter_sticker_flood': True,
-    'filter_swear': True,
-    'caps_limit': 50,
-    'min_length': 5,
-    'sticker_flood_limit': 5,
-    'sticker_flood_time': 60,
-    'chat_creator': 0,
-    'custom_admins': [],
-    'chat_title': 'Неизвестный чат',
-    'added_date': '',
-    'last_seen': '',
-    'is_group': False  # Отличаем группы от личных чатов
-}
-
-SETTINGS_FILE = 'bot_settings.json'
-sticker_tracker = defaultdict(list)
-
-# ============================================
-# СПИСОК МАТОВ
-# ============================================
-SWEAR_WORDS = [
-    'хуй', 'пизд', 'ебл', 'еба', 'ёб', 'бля', 'блять', 'сука', 'пиздец',
-    'нахер', 'нафиг', 'похер', 'хер', 'мудак', 'гандон', 'пидор', 'педик',
-    'шлюх', 'простит', 'далбаеб', 'долбоеб', 'ебан', 'ебну', 'раком',
-    'залуп', 'манда', 'сперм', 'мошонк', 'яичк', 'член', 'пенис', 'вагин',
-    'трах', 'секс', 'fuck', 'shit', 'asshole', 'bitch', 'whore', 'slut',
-]
-
-# ============================================
-# ЗАГРУЗКА НАСТРОЕК
-# ============================================
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"❌ Ошибка загрузки настроек: {e}")
-            return {}
-    return {}
-
-def save_settings(settings):
-    try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
-        print("💾 Настройки сохранены")
-    except Exception as e:
-        print(f"❌ Ошибка сохранения настроек: {e}")
-
-chat_settings = load_settings()
 
 # ============================================
 # НАСТРОЙКА ЛОГИРОВАНИЯ
@@ -120,54 +38,69 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-def get_chat_settings(chat_id):
-    chat_id_str = str(chat_id)
-    if chat_id_str not in chat_settings:
-        chat_settings[chat_id_str] = DEFAULT_SETTINGS.copy()
-        chat_settings[chat_id_str]['added_date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        save_settings(chat_settings)
-    return chat_settings[chat_id_str]
+# ============================================
+# НАСТРОЙКИ ФИЛЬТРОВ
+# ============================================
+SETTINGS_FILE = 'bot_settings.json'
+sticker_tracker = defaultdict(list)
 
-def is_admin(chat_id, user_id):
-    """Проверяет, является ли пользователь админом бота в этом чате"""
-    settings = get_chat_settings(chat_id)
-    
-    # Создатель чата
-    if settings.get('chat_creator') == user_id:
-        return True
-    
-    # Главный админ
-    if user_id == MY_ID:
-        return True
-    
-    # Дополнительные админы
-    if user_id in settings.get('custom_admins', []):
-        return True
-    
-    return False
+# База данных чатов (только группы!)
+chat_data = {}
+
+def load_chat_data():
+    """Загружает данные о чатах"""
+    global chat_data
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                chat_data = json.load(f)
+            print(f"✅ Загружено {len(chat_data)} чатов")
+        except:
+            chat_data = {}
+    else:
+        chat_data = {}
+
+def save_chat_data():
+    """Сохраняет данные о чатах"""
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(chat_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"❌ Ошибка сохранения: {e}")
+
+# Загружаем данные при старте
+load_chat_data()
+
+# ============================================
+# СПИСОК МАТОВ
+# ============================================
+BAD_WORDS = [
+    'хуй', 'пизд', 'ебл', 'еба', 'ёб', 'бля', 'блять', 'сука', 'пиздец',
+    'нахер', 'нафиг', 'похер', 'хер', 'мудак', 'гандон', 'пидор', 'педик',
+    'шлюх', 'далбаеб', 'долбоеб', 'ебан', 'ебну', 'fuck', 'shit', 'asshole'
+]
 
 # ============================================
 # ФУНКЦИИ ПРОВЕРКИ
 # ============================================
-def is_tg_link(text):
+def has_tg_link(text):
+    """Проверяет ссылки на Telegram"""
     if not text:
         return False
     return 't.me/' in text.lower()
 
-def is_bad_sticker(sticker):
+def is_18_sticker(sticker):
+    """Проверяет 18+ стикеры"""
     if not sticker or not sticker.set_name:
         return False
     
     name = sticker.set_name.lower()
-    bad_words = ['nsfw', '18+', 'sex', 'porn', 'adult', 'hentai', 'xxx']
-    
-    for word in bad_words:
-        if word in name:
-            return True
-    return False
+    bad = ['nsfw', '18+', 'sex', 'porn', 'adult', 'hentai', 'xxx']
+    return any(word in name for word in bad)
 
-def is_too_many_caps(text, limit=50, min_length=5):
-    if not text or len(text) < min_length:
+def is_caps(text, limit=50):
+    """Проверяет капс"""
+    if not text or len(text) < 5:
         return False
     
     letters = [c for c in text if c.isalpha()]
@@ -176,27 +109,54 @@ def is_too_many_caps(text, limit=50, min_length=5):
     
     caps = sum(1 for c in letters if c.isupper())
     percent = (caps / len(letters)) * 100
-    
     return percent > limit
 
-def contains_swear(text):
+def has_swear(text):
+    """Проверяет маты"""
     if not text:
         return False
     
-    text_lower = text.lower()
-    for word in SWEAR_WORDS:
-        if word in text_lower:
+    text = text.lower()
+    for word in BAD_WORDS:
+        if word in text:
             return True
     return False
 
-def check_sticker_flood(user_id, chat_id, limit=5, time_window=60):
+def is_flood(user_id, chat_id, limit=5):
+    """Проверяет флуд стикерами"""
     key = f"{user_id}:{chat_id}"
-    current_time = time.time()
+    now = time.time()
     
-    sticker_tracker[key] = [t for t in sticker_tracker[key] if current_time - t < time_window]
-    sticker_tracker[key].append(current_time)
+    # Очищаем старые записи (старше 60 секунд)
+    sticker_tracker[key] = [t for t in sticker_tracker.get(key, []) if now - t < 60]
+    
+    # Добавляем новый стикер
+    if key not in sticker_tracker:
+        sticker_tracker[key] = []
+    sticker_tracker[key].append(now)
     
     return len(sticker_tracker[key]) > limit
+
+# ============================================
+# ПРОВЕРКА ПРАВ
+# ============================================
+def is_chat_admin(chat_id, user_id):
+    """Проверяет, является ли пользователь админом в этом чате"""
+    chat = chat_data.get(str(chat_id), {})
+    
+    # Главный админ бота
+    if user_id == ADMIN_ID:
+        return True
+    
+    # Тот, кто добавил бота
+    if chat.get('creator') == user_id:
+        return True
+    
+    # Дополнительные админы
+    if user_id in chat.get('admins', []):
+        return True
+    
+    return False
 
 # ============================================
 # КОМАНДЫ
@@ -205,176 +165,77 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (
         f"╔════════════════════════╗\n"
-        f"║   *ДОБРО ПОЖАЛОВАТЬ*   ║\n"
+        f"║   ДОБРО ПОЖАЛОВАТЬ!   ║\n"
         f"║      👋 {user.first_name}      ║\n"
         f"╚════════════════════════╝\n\n"
-        f"*🤖 ANTISPAM БОТ*\n"
-        f"Я защищаю группы от спама\n\n"
-        f"*🔍 ЧТО ПРОВЕРЯЮ:*\n"
-        f"• 🔗 Ссылки на Telegram\n"
-        f"• 🔞 18+ стикеры\n"
-        f"• 🔠 Сообщения КАПСОМ\n"
-        f"• 🎭 Флуд стикерами\n"
-        f"• 🤬 Нецензурная лексика\n\n"
-        f"*📋 КОМАНДЫ:*\n"
-        f"╔══════════════════╗\n"
-        f"║  📚 /help        ║\n"
-        f"║  📊 /status      ║\n"
-        f"║  ⚙️ /settings    ║\n"
-        f"║  👑 /admin       ║\n"
-        f"║  🗑️ /delchat     ║\n"
-        f"╚══════════════════╝"
+        f"Я антиспам бот. Защищаю группы от:\n"
+        f"• 🔗 Ссылок на Telegram\n"
+        f"• 🔞 18+ стикеров\n"
+        f"• 🔠 КАПСА\n"
+        f"• 🎭 Флуда стикерами\n"
+        f"• 🤬 Матов\n\n"
+        f"Команды:\n"
+        f"/help - помощь\n"
+        f"/admin - управление админами\n"
+        f"/status - статус"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text)
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        f"╔════════════════╗\n"
-        f"║   *📚 ПОМОЩЬ*   ║\n"
-        f"╚════════════════╝\n\n"
-        f"*КАК ИСПОЛЬЗОВАТЬ:*\n"
-        f"1️⃣ Добавь бота в группу\n"
-        f"2️⃣ Сделай его администратором\n"
-        f"3️⃣ Настрой фильтры через /settings\n\n"
-        f"*👑 АДМИНЫ БОТА:*\n"
-        f"• /admin - управление админами\n"
-        f"• Тот, кто добавил бота - главный админ\n"
-        f"• Можно добавлять других админов\n"
-        f"• Админы не проверяются\n\n"
-        f"*🗑️ УДАЛЕНИЕ ЧАТОВ:*\n"
-        f"• /delchat - удалить чат из настроек"
+        f"Как использовать:\n"
+        f"1. Добавь бота в группу\n"
+        f"2. Сделай его администратором\n"
+        f"3. Настройки через /admin\n\n"
+        f"Админы бота не проверяются!"
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text)
 
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = f"╔════════════════╗\n║   *📊 СТАТУС*   ║\n╚════════════════╝\n\n"
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not chat_data:
+        await update.message.reply_text("❌ Бот не добавлен ни в одну группу")
+        return
     
-    found_chats = False
-    for chat_id_str, settings in chat_settings.items():
-        # Пропускаем личные чаты в статусе
-        if not settings.get('is_group', False):
-            continue
-            
+    text = "📊 СТАТУС:\n\n"
+    for chat_id, data in chat_data.items():
         try:
-            chat = await context.bot.get_chat(int(chat_id_str))
-            chat_title = chat.title or "Личный чат"
-            creator_id = settings.get('chat_creator', 0)
-            admins_count = len(settings.get('custom_admins', []))
-            added_date = settings.get('added_date', 'неизвестно')
-            
-            text += f"*📌 {chat_title}*\n"
-            text += f"🆔 ID: `{chat_id_str}`\n"
-            text += f"👑 Создатель: {creator_id}\n"
-            text += f"👥 Доп. админы: {admins_count}\n"
-            text += f"📅 Добавлен: {added_date}\n"
-            text += f"• 🔗 Ссылки: {'✅' if settings.get('filter_links', True) else '❌'}\n"
-            text += f"• 🔞 18+ стикеры: {'✅' if settings.get('filter_stickers', True) else '❌'}\n"
-            text += f"• 🔠 Капс: {'✅' if settings.get('filter_caps', True) else '❌'} ({settings.get('caps_limit', 50)}%)\n"
-            text += f"• 🎭 Флуд: {'✅' if settings.get('filter_sticker_flood', True) else '❌'} (макс. {settings.get('sticker_flood_limit', 5)})\n"
-            text += f"• 🤬 Маты: {'✅' if settings.get('filter_swear', True) else '❌'}\n\n"
-            found_chats = True
-        except Exception as e:
-            chat_title = settings.get('chat_title', 'Неизвестный чат')
-            text += f"*📌 {chat_title} (недоступен)*\n"
-            text += f"🆔 ID: `{chat_id_str}`\n"
-            text += f"• 🔗 Ссылки: {'✅' if settings.get('filter_links', True) else '❌'}\n"
-            text += f"• 🔞 18+ стикеры: {'✅' if settings.get('filter_stickers', True) else '❌'}\n"
-            text += f"• 🔠 Капс: {'✅' if settings.get('filter_caps', True) else '❌'} ({settings.get('caps_limit', 50)}%)\n"
-            text += f"• 🎭 Флуд: {'✅' if settings.get('filter_sticker_flood', True) else '❌'} (макс. {settings.get('sticker_flood_limit', 5)})\n"
-            text += f"• 🤬 Маты: {'✅' if settings.get('filter_swear', True) else '❌'}\n\n"
-            found_chats = True
+            chat = await context.bot.get_chat(int(chat_id))
+            name = chat.title or "Группа"
+            text += f"• {name}\n"
+            text += f"  Админов: {len(data.get('admins', []))}\n"
+        except:
+            pass
     
-    if not found_chats:
-        text += "❌ Бот еще не добавлен в группы."
-    
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text)
 
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для управления админами бота"""
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Управление админами"""
     user = update.effective_user
     
-    # Показываем список чатов, где пользователь админ (только группы)
-    keyboard = []
-    for chat_id_str, settings in chat_settings.items():
-        if not settings.get('is_group', False):
-            continue
-        if is_admin(chat_id_str, user.id):
+    # Показываем только группы, где пользователь админ
+    buttons = []
+    for chat_id, data in chat_data.items():
+        if is_chat_admin(chat_id, user.id):
             try:
-                chat = await context.bot.get_chat(int(chat_id_str))
-                chat_title = chat.title or "Группа"
-                keyboard.append([InlineKeyboardButton(f"👑 {chat_title}", callback_data=f"admin_{chat_id_str}")])
+                chat = await context.bot.get_chat(int(chat_id))
+                name = chat.title or "Группа"
+                buttons.append([InlineKeyboardButton(f"👑 {name}", callback_data=f"admin_{chat_id}")])
             except:
-                chat_title = settings.get('chat_title', 'Неизвестная группа')
-                keyboard.append([InlineKeyboardButton(f"👑 {chat_title}", callback_data=f"admin_{chat_id_str}")])
+                pass
     
-    if not keyboard:
-        await update.message.reply_text("❌ У тебя нет прав админа ни в одной группе!")
+    if not buttons:
+        await update.message.reply_text("❌ Нет доступных групп")
         return
     
     await update.message.reply_text(
-        "👑 *УПРАВЛЕНИЕ АДМИНАМИ*\n\nВыбери группу:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
-async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = []
-    for chat_id_str, settings in chat_settings.items():
-        if not settings.get('is_group', False):
-            continue
-        try:
-            chat = await context.bot.get_chat(int(chat_id_str))
-            chat_title = chat.title or "Группа"
-            keyboard.append([InlineKeyboardButton(f"⚙️ {chat_title}", callback_data=f"chat_{chat_id_str}")])
-        except:
-            chat_title = settings.get('chat_title', 'Неизвестная группа')
-            keyboard.append([InlineKeyboardButton(f"⚙️ {chat_title}", callback_data=f"chat_{chat_id_str}")])
-    
-    if not keyboard:
-        await update.message.reply_text("❌ Бот еще не добавлен ни в одну группу!", parse_mode="Markdown")
-        return
-    
-    await update.message.reply_text(
-        "⚙️ *НАСТРОЙКИ*\n\nВыбери группу:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
-
-async def delchat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    
-    if user.id != MY_ID:
-        await update.message.reply_text("❌ Эта команда только для главного админа!")
-        return
-    
-    if not chat_settings:
-        await update.message.reply_text("📭 Нет сохраненных чатов.")
-        return
-    
-    keyboard = []
-    for chat_id_str, settings in list(chat_settings.items()):
-        if not settings.get('is_group', False):
-            continue
-        try:
-            chat = await context.bot.get_chat(int(chat_id_str))
-            chat_title = chat.title or "Группа"
-            keyboard.append([InlineKeyboardButton(f"❌ {chat_title}", callback_data=f"delchat_{chat_id_str}")])
-        except:
-            chat_title = settings.get('chat_title', 'Неизвестная группа')
-            keyboard.append([InlineKeyboardButton(f"❌ {chat_title}", callback_data=f"delchat_{chat_id_str}")])
-    
-    keyboard.append([InlineKeyboardButton("🔙 ОТМЕНА", callback_data="delchat_cancel")])
-    
-    await update.message.reply_text(
-        "🗑 *Выбери группу для удаления:*",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        "Выбери группу:",
+        reply_markup=InlineKeyboardMarkup(buttons)
     )
 
 # ============================================
 # ОБРАБОТКА КНОПОК
 # ============================================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
@@ -383,491 +244,280 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data.startswith("admin_"):
         chat_id = data.replace("admin_", "")
-        if not is_admin(chat_id, user_id):
-            await query.edit_message_text("❌ У тебя нет прав в этой группе!")
+        
+        if not is_chat_admin(chat_id, user_id):
+            await query.edit_message_text("❌ Нет прав")
             return
         
-        settings = get_chat_settings(chat_id)
-        admins_list = settings.get('custom_admins', [])
+        chat = chat_data.get(chat_id, {})
+        admins = chat.get('admins', [])
         
-        try:
-            chat = await context.bot.get_chat(int(chat_id))
-            chat_title = chat.title or "Группа"
-        except:
-            chat_title = settings.get('chat_title', 'Неизвестная группа')
-        
-        text = f"👑 *Админы группы: {chat_title}*\n\n"
-        text += f"👑 Главный админ: ID `{settings.get('chat_creator', 'неизвестен')}`\n\n"
-        text += "*Дополнительные админы:*\n"
-        
-        if admins_list:
-            for admin_id in admins_list:
-                text += f"• ID: `{admin_id}`\n"
+        text = f"👑 Админы:\n\n"
+        text += f"• Создатель: {chat.get('creator', '?')}\n"
+        if admins:
+            text += "\nДополнительные:\n"
+            for a in admins:
+                text += f"• {a}\n"
         else:
-            text += "• Нет дополнительных админов\n"
+            text += "\nНет дополнительных админов"
         
-        keyboard = [
-            [InlineKeyboardButton("➕ ДОБАВИТЬ АДМИНА", callback_data=f"addadmin_{chat_id}")],
-            [InlineKeyboardButton("➖ УДАЛИТЬ АДМИНА", callback_data=f"removeadmin_{chat_id}")],
-            [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_to_admin")]
+        buttons = [
+            [InlineKeyboardButton("➕ Добавить", callback_data=f"add_{chat_id}")],
+            [InlineKeyboardButton("➖ Удалить", callback_data=f"remove_{chat_id}")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back")]
         ]
         
         await query.edit_message_text(
             text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
     
-    elif data.startswith("addadmin_"):
-        chat_id = data.replace("addadmin_", "")
-        if not is_admin(chat_id, user_id):
-            await query.edit_message_text("❌ У тебя нет прав в этой группе!")
+    elif data.startswith("add_"):
+        chat_id = data.replace("add_", "")
+        context.user_data['waiting_for'] = ('add_admin', chat_id)
+        await query.edit_message_text(
+            "Отправь ID пользователя:"
+        )
+    
+    elif data.startswith("remove_"):
+        chat_id = data.replace("remove_", "")
+        chat = chat_data.get(chat_id, {})
+        admins = chat.get('admins', [])
+        
+        if not admins:
+            await query.edit_message_text("❌ Нет админов для удаления")
             return
+        
+        buttons = []
+        for a in admins:
+            buttons.append([InlineKeyboardButton(f"❌ {a}", callback_data=f"del_{chat_id}_{a}")])
+        buttons.append([InlineKeyboardButton("🔙 Назад", callback_data=f"admin_{chat_id}")])
         
         await query.edit_message_text(
-            "📝 *ДОБАВЛЕНИЕ АДМИНА*\n\n"
-            "Отправь мне ID пользователя, которого хочешь сделать админом.\n\n"
-            "🔍 *Как узнать ID?*\n"
-            "1. Напиши @userinfobot\n"
-            "2. Перешли любое сообщение от пользователя\n"
-            "3. Отправь полученный ID сюда\n\n"
-            "❗️ Отправь только число!",
-            parse_mode="Markdown"
-        )
-        context.user_data['adding_admin_for'] = chat_id
-    
-    elif data.startswith("removeadmin_"):
-        chat_id = data.replace("removeadmin_", "")
-        if not is_admin(chat_id, user_id):
-            await query.edit_message_text("❌ У тебя нет прав в этой группе!")
-            return
-        
-        settings = get_chat_settings(chat_id)
-        admins_list = settings.get('custom_admins', [])
-        
-        if not admins_list:
-            await query.edit_message_text("❌ Нет админов для удаления!")
-            return
-        
-        keyboard = []
-        for admin_id in admins_list:
-            keyboard.append([InlineKeyboardButton(f"❌ ID: {admin_id}", callback_data=f"deladmin_{chat_id}_{admin_id}")])
-        
-        keyboard.append([InlineKeyboardButton("🔙 НАЗАД", callback_data=f"admin_{chat_id}")])
-        
-        await query.edit_message_text(
-            "👑 *Выбери админа для удаления:*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            "Выбери админа:",
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
     
-    elif data.startswith("deladmin_"):
+    elif data.startswith("del_"):
         parts = data.split("_")
         chat_id = parts[1]
         admin_id = int(parts[2])
         
-        if not is_admin(chat_id, user_id):
-            await query.edit_message_text("❌ У тебя нет прав в этой группе!")
-            return
+        if chat_id in chat_data:
+            if admin_id in chat_data[chat_id].get('admins', []):
+                chat_data[chat_id]['admins'].remove(admin_id)
+                save_chat_data()
+                await query.edit_message_text(f"✅ Админ {admin_id} удален")
         
-        settings = get_chat_settings(chat_id)
-        if admin_id in settings.get('custom_admins', []):
-            settings['custom_admins'].remove(admin_id)
-            save_settings(chat_settings)
-            await query.edit_message_text(f"✅ Админ {admin_id} удален!")
-            time.sleep(1)
-            new_query = update
-            new_query.callback_query.data = f"admin_{chat_id}"
-            await button_handler(new_query, context)
-    
-    elif data == "back_to_admin":
-        keyboard = []
-        for chat_id_str, settings in chat_settings.items():
-            if not settings.get('is_group', False):
-                continue
-            if is_admin(chat_id_str, user_id):
-                try:
-                    chat = await context.bot.get_chat(int(chat_id_str))
-                    chat_title = chat.title or "Группа"
-                    keyboard.append([InlineKeyboardButton(f"👑 {chat_title}", callback_data=f"admin_{chat_id_str}")])
-                except:
-                    chat_title = settings.get('chat_title', 'Неизвестная группа')
-                    keyboard.append([InlineKeyboardButton(f"👑 {chat_title}", callback_data=f"admin_{chat_id_str}")])
-        
-        await query.edit_message_text(
-            "👑 *УПРАВЛЕНИЕ АДМИНАМИ*\n\nВыбери группу:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    
-    elif data.startswith("chat_"):
-        chat_id = data.replace("chat_", "")
-        settings = get_chat_settings(chat_id)
-        
-        try:
-            chat = await context.bot.get_chat(int(chat_id))
-            chat_title = chat.title or "Группа"
-        except:
-            chat_title = settings.get('chat_title', 'Неизвестная группа')
-        
-        keyboard = [
-            [InlineKeyboardButton(f"{'✅' if settings.get('filter_links', True) else '❌'} 🔗 Ссылки", callback_data=f"toggle_links_{chat_id}")],
-            [InlineKeyboardButton(f"{'✅' if settings.get('filter_stickers', True) else '❌'} 🔞 18+ стикеры", callback_data=f"toggle_stickers_{chat_id}")],
-            [InlineKeyboardButton(f"{'✅' if settings.get('filter_caps', True) else '❌'} 🔠 Капс ({settings.get('caps_limit', 50)}%)", callback_data=f"toggle_caps_{chat_id}")],
-            [InlineKeyboardButton(f"{'✅' if settings.get('filter_sticker_flood', True) else '❌'} 🎭 Флуд (макс. {settings.get('sticker_flood_limit', 5)})", callback_data=f"toggle_flood_{chat_id}")],
-            [InlineKeyboardButton(f"{'✅' if settings.get('filter_swear', True) else '❌'} 🤬 Маты", callback_data=f"toggle_swear_{chat_id}")],
-            [InlineKeyboardButton("📊 ЛИМИТ КАПСА", callback_data=f"caps_limit_{chat_id}")],
-            [InlineKeyboardButton("🎭 ЛИМИТ ФЛУДА", callback_data=f"flood_limit_{chat_id}")],
-            [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_to_settings")]
-        ]
-        
-        await query.edit_message_text(
-            f"⚙️ *{chat_title}*\n\nНажми для включения/выключения:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    
-    elif data == "back_to_settings":
-        keyboard = []
-        for chat_id_str, settings in chat_settings.items():
-            if not settings.get('is_group', False):
-                continue
-            try:
-                chat = await context.bot.get_chat(int(chat_id_str))
-                chat_title = chat.title or "Группа"
-                keyboard.append([InlineKeyboardButton(f"⚙️ {chat_title}", callback_data=f"chat_{chat_id_str}")])
-            except:
-                chat_title = settings.get('chat_title', 'Неизвестная группа')
-                keyboard.append([InlineKeyboardButton(f"⚙️ {chat_title}", callback_data=f"chat_{chat_id_str}")])
-        
-        await query.edit_message_text(
-            "⚙️ *НАСТРОЙКИ*\n\nВыбери группу:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    
-    elif data.startswith("toggle_"):
-        parts = data.split("_")
-        action = parts[1]
-        chat_id = parts[2]
-        settings = get_chat_settings(chat_id)
-        
-        if action == "links":
-            settings['filter_links'] = not settings.get('filter_links', True)
-        elif action == "stickers":
-            settings['filter_stickers'] = not settings.get('filter_stickers', True)
-        elif action == "caps":
-            settings['filter_caps'] = not settings.get('filter_caps', True)
-        elif action == "flood":
-            settings['filter_sticker_flood'] = not settings.get('filter_sticker_flood', True)
-        elif action == "swear":
-            settings['filter_swear'] = not settings.get('filter_swear', True)
-        
-        save_settings(chat_settings)
-        
+        # Возврат
         new_query = update
-        new_query.callback_query.data = f"chat_{chat_id}"
-        await button_handler(new_query, context)
+        new_query.callback_query.data = f"admin_{chat_id}"
+        await button(new_query, context)
     
-    elif data.startswith("caps_limit_"):
-        chat_id = data.replace("caps_limit_", "")
-        keyboard = [
-            [InlineKeyboardButton("30%", callback_data=f"set_caps_{chat_id}_30")],
-            [InlineKeyboardButton("50%", callback_data=f"set_caps_{chat_id}_50")],
-            [InlineKeyboardButton("70%", callback_data=f"set_caps_{chat_id}_70")],
-            [InlineKeyboardButton("80%", callback_data=f"set_caps_{chat_id}_80")],
-            [InlineKeyboardButton("🔙 НАЗАД", callback_data=f"chat_{chat_id}")]
-        ]
-        await query.edit_message_text(
-            "📊 *ВЫБЕРИ ЛИМИТ КАПСА*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    
-    elif data.startswith("flood_limit_"):
-        chat_id = data.replace("flood_limit_", "")
-        keyboard = [
-            [InlineKeyboardButton("3 стикера", callback_data=f"set_flood_{chat_id}_3")],
-            [InlineKeyboardButton("5 стикеров", callback_data=f"set_flood_{chat_id}_5")],
-            [InlineKeyboardButton("7 стикеров", callback_data=f"set_flood_{chat_id}_7")],
-            [InlineKeyboardButton("10 стикеров", callback_data=f"set_flood_{chat_id}_10")],
-            [InlineKeyboardButton("🔙 НАЗАД", callback_data=f"chat_{chat_id}")]
-        ]
-        await query.edit_message_text(
-            "🎭 *ВЫБЕРИ ЛИМИТ ФЛУДА*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-    
-    elif data.startswith("set_caps_"):
-        parts = data.split("_")
-        chat_id = parts[2]
-        limit = int(parts[3])
-        settings = get_chat_settings(chat_id)
-        settings['caps_limit'] = limit
-        save_settings(chat_settings)
-        await query.edit_message_text(f"✅ Лимит капса изменен на {limit}%")
-        time.sleep(1)
-        new_query = update
-        new_query.callback_query.data = f"chat_{chat_id}"
-        await button_handler(new_query, context)
-    
-    elif data.startswith("set_flood_"):
-        parts = data.split("_")
-        chat_id = parts[2]
-        limit = int(parts[3])
-        settings = get_chat_settings(chat_id)
-        settings['sticker_flood_limit'] = limit
-        save_settings(chat_settings)
-        await query.edit_message_text(f"✅ Лимит флуда изменен на {limit}")
-        time.sleep(1)
-        new_query = update
-        new_query.callback_query.data = f"chat_{chat_id}"
-        await button_handler(new_query, context)
-    
-    elif data == "delchat_cancel":
-        await query.edit_message_text("❌ Удаление отменено.")
-    
-    elif data.startswith("delchat_"):
-        chat_id = data.replace("delchat_", "")
-        if chat_id in chat_settings:
-            chat_title = chat_settings[chat_id].get('chat_title', 'Неизвестная группа')
-            del chat_settings[chat_id]
-            save_settings(chat_settings)
-            await query.edit_message_text(f"✅ Группа {chat_title} удалена из настроек!")
+    elif data == "back":
+        await admin(update, context)
 
 # ============================================
-# ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ (ТОЛЬКО ДЛЯ ЛИЧКИ!)
+# ОБРАБОТКА ТЕКСТА (ДЛЯ ДОБАВЛЕНИЯ АДМИНОВ)
 # ============================================
-async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текстовые сообщения только в личных чатах"""
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает текст только в ЛС для добавления админов"""
     
-    # Проверяем, что это личный чат
     if update.effective_chat.type != "private":
         return
     
-    # Проверяем, ждем ли мы ID для добавления админа
-    if 'adding_admin_for' not in context.user_data:
+    if 'waiting_for' not in context.user_data:
         return
     
-    chat_id = context.user_data['adding_admin_for']
+    action, chat_id = context.user_data['waiting_for']
     user_id = update.effective_user.id
     
-    if not is_admin(chat_id, user_id):
-        await update.message.reply_text("❌ У тебя нет прав!")
-        del context.user_data['adding_admin_for']
-        return
-    
-    try:
-        new_admin_id = int(update.message.text.strip())
-        settings = get_chat_settings(chat_id)
+    if action == 'add_admin' and is_chat_admin(chat_id, user_id):
+        try:
+            new_admin = int(update.message.text.strip())
+            
+            if chat_id not in chat_data:
+                chat_data[chat_id] = {'admins': []}
+            if 'admins' not in chat_data[chat_id]:
+                chat_data[chat_id]['admins'] = []
+            
+            if new_admin in chat_data[chat_id]['admins']:
+                await update.message.reply_text("❌ Уже админ")
+            else:
+                chat_data[chat_id]['admins'].append(new_admin)
+                save_chat_data()
+                await update.message.reply_text(f"✅ Админ {new_admin} добавлен")
         
-        if 'custom_admins' not in settings:
-            settings['custom_admins'] = []
+        except:
+            await update.message.reply_text("❌ Нужно отправить число")
         
-        if new_admin_id in settings['custom_admins']:
-            await update.message.reply_text("❌ Этот пользователь уже админ!")
-        elif new_admin_id == settings.get('chat_creator'):
-            await update.message.reply_text("❌ Это создатель чата, он уже админ!")
-        elif new_admin_id == MY_ID:
-            await update.message.reply_text("❌ Это главный админ бота!")
-        else:
-            settings['custom_admins'].append(new_admin_id)
-            save_settings(chat_settings)
-            await update.message.reply_text(f"✅ Пользователь {new_admin_id} добавлен в админы!")
-        
-        del context.user_data['adding_admin_for']
-        
-    except ValueError:
-        await update.message.reply_text("❌ Это не ID! Отправь число.")
+        del context.user_data['waiting_for']
 
 # ============================================
 # ПРОВЕРКА СООБЩЕНИЙ В ГРУППАХ
 # ============================================
-async def check_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверяет сообщения только в группах"""
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет сообщения в группах"""
     
-    # Работаем только в группах
     if update.effective_chat.type == "private":
         return
     
-    message = update.message
-    if not message:
+    msg = update.message
+    if not msg:
         return
     
-    user = message.from_user
-    chat = message.chat
+    user = msg.from_user
+    chat = msg.chat
     
     if user.is_bot:
         return
     
-    settings = get_chat_settings(chat.id)
-    settings['chat_title'] = chat.title or "Группа"
-    settings['is_group'] = True
-    settings['last_seen'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    save_settings(chat_settings)
-    
     # Пропускаем админов
-    if user.id == MY_ID:
+    if is_chat_admin(chat.id, user.id):
         return
     
-    if settings.get('chat_creator') == user.id:
-        return
-    
-    if user.id in settings.get('custom_admins', []):
-        return
-    
+    # Пропускаем админов Telegram
     try:
-        chat_member = await context.bot.get_chat_member(chat.id, user.id)
-        if chat_member.status in ['administrator', 'creator']:
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        if member.status in ['administrator', 'creator']:
             return
     except:
         pass
     
+    # Получаем настройки чата (пока все по умолчанию)
+    settings = chat_data.get(str(chat.id), {})
+    
     # Проверка стикеров
-    if message.sticker:
-        if settings.get('filter_sticker_flood', True):
-            if check_sticker_flood(user.id, chat.id, settings.get('sticker_flood_limit', 5)):
-                await message.delete()
-                await message.reply_text(f"@{user.username} ❗ *НЕ ФЛУДИ СТИКЕРАМИ!*", parse_mode="Markdown")
-                return
+    if msg.sticker:
+        # Флуд
+        if is_flood(user.id, chat.id):
+            try:
+                await msg.delete()
+                await msg.reply_text(f"@{user.username} не флуди стикерами!")
+            except:
+                pass
+            return
         
-        if settings.get('filter_stickers', True) and is_bad_sticker(message.sticker):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *18+ СТИКЕРЫ ЗАПРЕЩЕНЫ*", parse_mode="Markdown")
+        # 18+
+        if is_18_sticker(msg.sticker):
+            try:
+                await msg.delete()
+                await msg.reply_text(f"@{user.username} 18+ стикеры запрещены!")
+            except:
+                pass
             return
     
     # Проверка текста
-    if message.text:
-        if settings.get('filter_links', True) and is_tg_link(message.text):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *ССЫЛКИ ЗАПРЕЩЕНЫ*", parse_mode="Markdown")
+    text = msg.text or msg.caption
+    if text:
+        # Ссылки
+        if has_tg_link(text):
+            try:
+                await msg.delete()
+                await msg.reply_text(f"@{user.username} ссылки на Telegram запрещены!")
+            except:
+                pass
             return
         
-        if settings.get('filter_swear', True) and contains_swear(message.text):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *МАТЫ ЗАПРЕЩЕНЫ*", parse_mode="Markdown")
+        # Маты
+        if has_swear(text):
+            try:
+                await msg.delete()
+                await msg.reply_text(f"@{user.username} маты запрещены!")
+            except:
+                pass
             return
         
-        if settings.get('filter_caps', True) and is_too_many_caps(message.text, settings.get('caps_limit', 50)):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *НЕ КРИЧИ!*", parse_mode="Markdown")
-            return
-    
-    # Проверка подписей
-    if message.caption:
-        if settings.get('filter_links', True) and is_tg_link(message.caption):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *ССЫЛКИ ЗАПРЕЩЕНЫ*", parse_mode="Markdown")
-            return
-        
-        if settings.get('filter_swear', True) and contains_swear(message.caption):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *МАТЫ ЗАПРЕЩЕНЫ*", parse_mode="Markdown")
-            return
-        
-        if settings.get('filter_caps', True) and is_too_many_caps(message.caption, settings.get('caps_limit', 50)):
-            await message.delete()
-            await message.reply_text(f"@{user.username} ❗ *НЕ КРИЧИ!*", parse_mode="Markdown")
+        # Капс
+        if is_caps(text):
+            try:
+                await msg.delete()
+                await msg.reply_text(f"@{user.username} не кричи!")
+            except:
+                pass
             return
 
 # ============================================
 # НОВЫЙ ЧАТ
 # ============================================
-async def new_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def new_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Когда бота добавляют в новый чат"""
-    message = update.message
-    if not message or not message.new_chat_members:
+    msg = update.message
+    if not msg or not msg.new_chat_members:
         return
     
-    # Игнорируем личные чаты
-    if message.chat.type == "private":
+    # Только группы
+    if msg.chat.type == "private":
         return
     
-    for member in message.new_chat_members:
+    for member in msg.new_chat_members:
         if member.id == context.bot.id:
-            chat_id = str(message.chat.id)
-            adder_id = message.from_user.id
-            chat_title = message.chat.title or "Группа"
+            chat_id = str(msg.chat.id)
+            adder_id = msg.from_user.id
             
-            if chat_id not in chat_settings:
-                settings = DEFAULT_SETTINGS.copy()
-                settings['chat_creator'] = adder_id
-                settings['chat_title'] = chat_title
-                settings['is_group'] = True
-                settings['added_date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                settings['last_seen'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                chat_settings[chat_id] = settings
-                save_settings(chat_settings)
-                
-                try:
-                    await context.bot.send_message(
-                        MY_ID,
-                        f"✅ Бот добавлен в группу!\n\n"
-                        f"📌 Название: {chat_title}\n"
-                        f"🆔 ID: {chat_id}\n"
-                        f"👑 Добавил: {adder_id}"
-                    )
-                except:
-                    pass
+            # Сохраняем информацию о чате
+            chat_data[chat_id] = {
+                'creator': adder_id,
+                'admins': [],
+                'added': datetime.now().strftime("%Y-%m-%d %H:%M")
+            }
+            save_chat_data()
+            
+            # Уведомляем админа
+            try:
+                await context.bot.send_message(
+                    ADMIN_ID,
+                    f"✅ Бот добавлен в группу!\n"
+                    f"Название: {msg.chat.title}\n"
+                    f"ID: {chat_id}\n"
+                    f"Добавил: {adder_id}"
+                )
+            except:
+                pass
 
 # ============================================
-# ЗАПУСК (ОСНОВНАЯ ФУНКЦИЯ)
+# ЗАПУСК
 # ============================================
 def main():
     print("=" * 60)
     print("╔══════════════════════════╗")
-    print("║  ANTISPAM БОТ ЗАПУЩЕН   ║")
+    print("║     ANTISPAM БОТ         ║")
     print("╚══════════════════════════╝")
     print("=" * 60)
-    print(f"📌 Токен загружен из .env")
-    print(f"📌 Твой ID: {MY_ID}")
-    
-    # Подсчет только групп
-    groups_count = sum(1 for s in chat_settings.values() if s.get('is_group', False))
-    print(f"📌 Групп в настройках: {groups_count}")
-    print("=" * 60)
-    print("📋 Доступные команды:")
-    print("   🚀 /start  - Приветствие")
-    print("   📚 /help   - Помощь")
-    print("   📊 /status - Статус")
-    print("   ⚙️ /settings - Настройки")
-    print("   👑 /admin  - Управление админами")
-    print("   🗑️ /delchat - Удалить группу")
+    print(f"✅ Твой ID: {ADMIN_ID}")
+    print(f"✅ Групп в базе: {len(chat_data)}")
     print("=" * 60)
     
     app = Application.builder().token(TOKEN).build()
     
     # Команды
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("admin", admin_command))
-    app.add_handler(CommandHandler("delchat", delchat_command))
+    app.add_handler(CommandHandler("help", help))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("admin", admin))
     
-    # Обработчики кнопок
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # Кнопки
+    app.add_handler(CallbackQueryHandler(button))
     
-    # Обработчик текста ТОЛЬКО для личных сообщений
+    # Текст (только для ЛС)
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, 
-        handle_private_text
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        text_handler
     ))
     
-    # Обработчик сообщений в группах
+    # Проверка сообщений в группах
     app.add_handler(MessageHandler(
         (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Sticker.ALL) & filters.ChatType.GROUPS,
-        check_group
+        check
     ))
     
-    # Обработчик добавления в новые чаты
+    # Новые чаты
     app.add_handler(MessageHandler(
         filters.StatusUpdate.NEW_CHAT_MEMBERS,
-        new_chat_member
+        new_chat
     ))
     
-    print("✅ Бот работает! Нажми Ctrl+C для остановки")
+    print("✅ Бот запущен!")
     print("=" * 60)
     
     app.run_polling()
